@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from ortools.sat.python import cp_model
 
-st.title("シフト最適化（OR-Tools 完全版）")
+st.title("シフト最適化（OR-Tools 完全版＋公平性）")
 
 # ---------------------------
 # 基本設定
@@ -73,20 +73,17 @@ if st.button("最適化実行"):
                 model.Add(x[(s, h)] == 0)
 
     # ---------------------------
-    # ③ ご飯休憩（各スタッフ必須）
+    # ③ ご飯休憩（必須）
     # ---------------------------
     lunch1 = [11, 12, 13]
     lunch2 = [17, 18, 19, 20]
 
     for s in staff_names:
-        # 昼に必ず1時間休憩
         model.Add(sum(1 - x[(s, h)] for h in lunch1) >= 1)
-
-        # 夜に必ず1時間休憩
         model.Add(sum(1 - x[(s, h)] for h in lunch2) >= 1)
 
     # ---------------------------
-    # ④ 単発禁止（超重要）
+    # ④ 単発禁止
     # ---------------------------
     for s in staff_names:
         for h in hours:
@@ -94,10 +91,35 @@ if st.button("最適化実行"):
                 model.Add(x[(s, h)] <= x[(s, h-1)] + x[(s, h+1)])
 
     # ---------------------------
-    # ⑤ 勤務希望最大化
+    # ⑤ 勤務時間計算
     # ---------------------------
-    model.Maximize(
-        sum(x[(s, h)] for s in staff_names for h in hours if work_input[(s, h)])
+    total_work = {}
+    for s in staff_names:
+        total_work[s] = model.NewIntVar(0, 24, f"total_{s}")
+        model.Add(total_work[s] == sum(x[(s, h)] for h in hours))
+
+    # 平均勤務時間
+    avg = sum(required[h] for h in hours) // num_staff
+
+    # ---------------------------
+    # ⑥ 偏り最小化（ここが新規）
+    # ---------------------------
+    diff_vars = []
+
+    for s in staff_names:
+        diff = model.NewIntVar(0, 24, f"diff_{s}")
+        model.AddAbsEquality(diff, total_work[s] - avg)
+        diff_vars.append(diff)
+
+    # ---------------------------
+    # ⑦ 目的関数（重要）
+    # 優先順位：
+    # ① 偏り最小化
+    # ② 勤務希望最大化
+    # ---------------------------
+    model.Minimize(
+        sum(diff_vars) * 1000  # ←最優先（重み大）
+        - sum(x[(s, h)] for s in staff_names for h in hours if work_input[(s, h)])
     )
 
     # ---------------------------
@@ -120,17 +142,16 @@ if st.button("最適化実行"):
                 schedule.loc[s, h] = int(solver.Value(x[(s, h)]))
 
         # 勤務時間
-        st.subheader("勤務時間")
+        st.subheader("勤務時間（公平性あり）")
         st.dataframe(schedule.sum(axis=1).rename("勤務時間"))
 
         # ---------------------------
-        # ビジュアルシフト表
+        # ビジュアル
         # ---------------------------
         st.subheader("シフト表")
 
         display_df = schedule.copy()
         display_df.columns = [f"{h:02d}" for h in hours]
-        display_df.index.name = "スタッフ"
 
         def color_map(val):
             return "background-color: #F6A068" if val == 1 else "background-color: #FFEEDB"

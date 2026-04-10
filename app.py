@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from ortools.sat.python import cp_model
 
-st.title("シフト最適化（OR-Tools 完全版＋公平性）")
+st.title("シフト最適化（OR-Tools 完全版）")
 
 # ---------------------------
 # 基本設定
@@ -12,15 +12,25 @@ staff_names = [f"スタッフ{i+1}" for i in range(num_staff)]
 hours = list(range(24))
 
 # ---------------------------
-# 必要人数
+# 必要人数（順番修正版）
 # ---------------------------
 st.subheader("必要人数")
 
 required = {}
-cols = st.columns(6)
-for i, h in enumerate(hours):
-    with cols[i % 6]:
-        required[h] = st.number_input(f"{h}時", 0, num_staff, 3, key=f"req_{h}")
+
+for row in range(0, 24, 6):
+    cols = st.columns(6)
+    for i in range(6):
+        h = row + i
+        if h < 24:
+            with cols[i]:
+                required[h] = st.number_input(
+                    f"{h}時",
+                    0,
+                    num_staff,
+                    3,
+                    key=f"req_{h}"
+                )
 
 # ---------------------------
 # 希望入力
@@ -39,12 +49,12 @@ for i, s in enumerate(staff_names):
         c1, c2 = st.columns(2)
 
         with c1:
-            st.write("勤務希望")
+            st.markdown("🟠 **勤務希望**")
             for h in hours:
                 work_input[(s, h)] = st.checkbox(f"{h}時勤務", key=f"w_{s}_{h}")
 
         with c2:
-            st.write("休憩希望")
+            st.markdown("🔵 **休憩希望**")
             for h in hours:
                 break_input[(s, h)] = st.checkbox(f"{h}時休憩", key=f"b_{s}_{h}")
 
@@ -91,34 +101,26 @@ if st.button("最適化実行"):
                 model.Add(x[(s, h)] <= x[(s, h-1)] + x[(s, h+1)])
 
     # ---------------------------
-    # ⑤ 勤務時間計算
+    # ⑤ 勤務時間（公平性）
     # ---------------------------
     total_work = {}
     for s in staff_names:
         total_work[s] = model.NewIntVar(0, 24, f"total_{s}")
         model.Add(total_work[s] == sum(x[(s, h)] for h in hours))
 
-    # 平均勤務時間
     avg = sum(required[h] for h in hours) // num_staff
 
-    # ---------------------------
-    # ⑥ 偏り最小化（ここが新規）
-    # ---------------------------
     diff_vars = []
-
     for s in staff_names:
         diff = model.NewIntVar(0, 24, f"diff_{s}")
         model.AddAbsEquality(diff, total_work[s] - avg)
         diff_vars.append(diff)
 
     # ---------------------------
-    # ⑦ 目的関数（重要）
-    # 優先順位：
-    # ① 偏り最小化
-    # ② 勤務希望最大化
+    # ⑥ 目的関数
     # ---------------------------
     model.Minimize(
-        sum(diff_vars) * 1000  # ←最優先（重み大）
+        sum(diff_vars) * 1000
         - sum(x[(s, h)] for s in staff_names for h in hours if work_input[(s, h)])
     )
 
